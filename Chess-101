@@ -1,0 +1,600 @@
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <cctype>
+#include <string>
+#include <algorithm>
+#include <cmath>
+using namespace std;
+
+// ==================== FORWARD DECLARATIONS ====================
+class Piece;
+class Board;
+
+// ==================== HELPER FUNCTIONS ====================
+namespace ChessHelpers {
+    // Check if a path is clear along a rank or file (for Rook/Queen)
+    bool isStraightPathClear(int fromRow, int fromCol, int toRow, int toCol, Piece* const board[8][8]);
+
+    // Check if a path is clear diagonally (for Bishop/Queen)
+    bool isDiagonalPathClear(int fromRow, int fromCol, int toRow, int toCol, Piece* const board[8][8]);
+
+    // Check if destination is empty or has an enemy piece
+    bool canLandOn(int row, int col, bool isWhite, Piece* const board[8][8]);
+}
+
+// ==================== BASE CLASS: Piece ====================
+class Piece {
+protected:
+    char symbol;
+    bool isWhite;
+    int row, col;
+    bool hasMoved;
+
+public:
+    Piece(bool white, int r, int c)
+        : isWhite(white), row(r), col(c), hasMoved(false), symbol(' ') {}
+
+    virtual ~Piece() {}
+
+    // Only movement logic — no check detection
+    virtual bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const = 0;
+    virtual Piece* clone() const = 0;
+
+    char getSymbol()    const { return isWhite ? toupper(symbol) : tolower(symbol); }
+    bool getColor()     const { return isWhite; }
+    int  getRow()       const { return row; }
+    int  getCol()       const { return col; }
+    bool getHasMoved()  const { return hasMoved; }
+
+    void setPosition(int r, int c) { row = r; col = c; }
+    void setHasMoved(bool moved)   { hasMoved = moved; }
+};
+
+// ==================== HELPER IMPLEMENTATIONS ====================
+namespace ChessHelpers {
+    bool isStraightPathClear(int fromRow, int fromCol, int toRow, int toCol, Piece* const board[8][8]) {
+        if (fromRow == toRow) {
+            int step = (toCol > fromCol) ? 1 : -1;
+            for (int c = fromCol + step; c != toCol; c += step)
+                if (board[fromRow][c] != nullptr) return false;
+        } else {
+            int step = (toRow > fromRow) ? 1 : -1;
+            for (int r = fromRow + step; r != toRow; r += step)
+                if (board[r][fromCol] != nullptr) return false;
+        }
+        return true;
+    }
+
+    bool isDiagonalPathClear(int fromRow, int fromCol, int toRow, int toCol, Piece* const board[8][8]) {
+        int rowStep = (toRow > fromRow) ? 1 : -1;
+        int colStep = (toCol > fromCol) ? 1 : -1;
+        int r = fromRow + rowStep, c = fromCol + colStep;
+        while (r != toRow) {
+            if (board[r][c] != nullptr) return false;
+            r += rowStep;
+            c += colStep;
+        }
+        return true;
+    }
+
+    bool canLandOn(int row, int col, bool isWhite, Piece* const board[8][8]) {
+        return board[row][col] == nullptr || board[row][col]->getColor() != isWhite;
+    }
+}
+
+// ==================== PIECE CLASSES (movement rules only) ====================
+
+class Pawn : public Piece {
+public:
+    Pawn(bool white, int r, int c) : Piece(white, r, c) { symbol = 'P'; }
+    Piece* clone() const override { return new Pawn(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        int dir      = isWhite ? -1 : 1;
+        int startRow = isWhite ?  6 :  1;
+
+        // One step forward
+        if (newCol == col && newRow == row + dir && board[newRow][newCol] == nullptr)
+            return true;
+
+        // Two steps forward from start
+        if (newCol == col && newRow == row + 2 * dir && row == startRow && !hasMoved
+            && board[newRow][newCol] == nullptr
+            && board[row + dir][col] == nullptr)
+            return true;
+
+        // Diagonal capture
+        if (abs(newCol - col) == 1 && newRow == row + dir
+            && board[newRow][newCol] != nullptr
+            && board[newRow][newCol]->getColor() != isWhite)
+            return true;
+
+        return false;
+        // En passant is handled separately in Board
+    }
+};
+
+class Rook : public Piece {
+public:
+    Rook(bool white, int r, int c) : Piece(white, r, c) { symbol = 'R'; }
+    Piece* clone() const override { return new Rook(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        if (row != newRow && col != newCol) return false;
+        if (!ChessHelpers::isStraightPathClear(row, col, newRow, newCol, board)) return false;
+        return ChessHelpers::canLandOn(newRow, newCol, isWhite, board);
+    }
+};
+
+class Knight : public Piece {
+public:
+    Knight(bool white, int r, int c) : Piece(white, r, c) { symbol = 'N'; }
+    Piece* clone() const override { return new Knight(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        int dr = abs(newRow - row), dc = abs(newCol - col);
+        if (!((dr == 2 && dc == 1) || (dr == 1 && dc == 2))) return false;
+        return ChessHelpers::canLandOn(newRow, newCol, isWhite, board);
+    }
+};
+
+class Bishop : public Piece {
+public:
+    Bishop(bool white, int r, int c) : Piece(white, r, c) { symbol = 'B'; }
+    Piece* clone() const override { return new Bishop(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        if (abs(newRow - row) != abs(newCol - col)) return false;
+        if (!ChessHelpers::isDiagonalPathClear(row, col, newRow, newCol, board)) return false;
+        return ChessHelpers::canLandOn(newRow, newCol, isWhite, board);
+    }
+};
+
+class Queen : public Piece {
+public:
+    Queen(bool white, int r, int c) : Piece(white, r, c) { symbol = 'Q'; }
+    Piece* clone() const override { return new Queen(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        bool straight = (row == newRow || col == newCol);
+        bool diagonal = (abs(newRow - row) == abs(newCol - col));
+
+        if (!straight && !diagonal) return false;
+
+        if (straight && !ChessHelpers::isStraightPathClear(row, col, newRow, newCol, board)) return false;
+        if (diagonal && !ChessHelpers::isDiagonalPathClear(row, col, newRow, newCol, board)) return false;
+
+        return ChessHelpers::canLandOn(newRow, newCol, isWhite, board);
+    }
+};
+
+class King : public Piece {
+public:
+    King(bool white, int r, int c) : Piece(white, r, c) { symbol = 'K'; }
+    Piece* clone() const override { return new King(*this); }
+
+    bool isValidMove(int newRow, int newCol, Piece* const board[8][8]) const override {
+        int dr = abs(newRow - row), dc = abs(newCol - col);
+        if (dr <= 1 && dc <= 1 && (dr + dc) > 0)
+            return ChessHelpers::canLandOn(newRow, newCol, isWhite, board);
+        return false;
+        // Castling is handled separately in Board
+    }
+};
+
+// ==================== BOARD CLASS ====================
+class Board {
+private:
+    Piece* board[8][8];
+    bool whiteTurn;
+    bool enPassantAvailable;
+    int  enPassantTargetRow, enPassantTargetCol;
+
+    // --- Attack & Check helpers ---
+
+    bool isSquareUnderAttack(int r, int c, bool byWhite) const {
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                if (board[i][j] && board[i][j]->getColor() == byWhite)
+                    if (board[i][j]->isValidMove(r, c, board))
+                        return true;
+        return false;
+    }
+
+    bool wouldLeaveKingInCheck(int fromRow, int fromCol, int toRow, int toCol) const {
+        // Simulate move on a temporary copy of the board state
+        Piece* tempBoard[8][8];
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                tempBoard[i][j] = board[i][j];
+
+        // Apply the move to tempBoard
+        tempBoard[toRow][toCol]   = tempBoard[fromRow][fromCol];
+        tempBoard[fromRow][fromCol] = nullptr;
+
+        // Temporarily update piece position for attack detection
+        int oldRow = tempBoard[toRow][toCol]->getRow();
+        int oldCol = tempBoard[toRow][toCol]->getCol();
+        tempBoard[toRow][toCol]->setPosition(toRow, toCol);
+
+        bool inCheck = false;
+        bool movingColor = tempBoard[toRow][toCol]->getColor();
+
+        // Find king
+        for (int i = 0; i < 8 && !inCheck; i++) {
+            for (int j = 0; j < 8 && !inCheck; j++) {
+                if (tempBoard[i][j]
+                    && tempBoard[i][j]->getSymbol() == 'K'
+                    && tempBoard[i][j]->getColor() == movingColor) {
+                    // Check if any enemy attacks the king square
+                    for (int ai = 0; ai < 8 && !inCheck; ai++)
+                        for (int aj = 0; aj < 8 && !inCheck; aj++)
+                            if (tempBoard[ai][aj] && tempBoard[ai][aj]->getColor() != movingColor)
+                                if (tempBoard[ai][aj]->isValidMove(i, j, tempBoard))
+                                    inCheck = true;
+                }
+            }
+        }
+
+        // Restore position
+        tempBoard[toRow][toCol]->setPosition(oldRow, oldCol);
+        return inCheck;
+    }
+
+    // --- Special move logic ---
+
+    bool isValidCastling(int fromRow, int fromCol, int toCol) const {
+        King* king = dynamic_cast<King*>(board[fromRow][fromCol]);
+        if (!king || king->getHasMoved()) return false;
+        if (abs(toCol - fromCol) != 2) return false;
+
+        int rookCol = (toCol > fromCol) ? 7 : 0;
+        Rook* rook  = dynamic_cast<Rook*>(board[fromRow][rookCol]);
+        if (!rook || rook->getHasMoved()) return false;
+
+        // All squares between king and rook must be empty
+        int step = (toCol > fromCol) ? 1 : -1;
+        for (int c = fromCol + step; c != rookCol; c += step)
+            if (board[fromRow][c] != nullptr) return false;
+
+        // King must not pass through or land on an attacked square
+        for (int c = fromCol; c != toCol + step; c += step)
+            if (isSquareUnderAttack(fromRow, c, !whiteTurn)) return false;
+
+        return true;
+    }
+
+    void executeCastling(int fromRow, int fromCol, int toCol) {
+        int rookFromCol = (toCol > fromCol) ? 7 : 0;
+        int rookToCol   = (toCol > fromCol) ? 5 : 3;
+
+        board[fromRow][toCol]     = board[fromRow][fromCol];
+        board[fromRow][fromCol]   = nullptr;
+        board[fromRow][toCol]->setPosition(fromRow, toCol);
+        board[fromRow][toCol]->setHasMoved(true);
+
+        board[fromRow][rookToCol]   = board[fromRow][rookFromCol];
+        board[fromRow][rookFromCol] = nullptr;
+        board[fromRow][rookToCol]->setPosition(fromRow, rookToCol);
+        board[fromRow][rookToCol]->setHasMoved(true);
+    }
+
+    bool tryEnPassant(int fromRow, int fromCol, int toRow, int toCol) {
+        if (!dynamic_cast<Pawn*>(board[fromRow][fromCol])) return false;
+        if (!enPassantAvailable) return false;
+
+        int dir = whiteTurn ? -1 : 1;
+        if (abs(toCol - fromCol) != 1 || toRow != fromRow + dir) return false;
+        if (toRow != enPassantTargetRow || toCol != enPassantTargetCol) return false;
+
+        // Remove the captured pawn (it sits on fromRow, toCol)
+        delete board[fromRow][toCol];
+        board[fromRow][toCol] = nullptr;
+
+        board[toRow][toCol]   = board[fromRow][fromCol];
+        board[fromRow][fromCol] = nullptr;
+        board[toRow][toCol]->setPosition(toRow, toCol);
+        return true;
+    }
+
+    void handlePromotion(int row, int col) {
+        bool isWhitePiece = board[row][col]->getColor();
+        cout << "\n  * PAWN PROMOTION! *\n";
+        cout << "  Choose: 1=Queen  2=Rook  3=Bishop  4=Knight\n";
+        cout << "  Enter (1-4): ";
+
+        int choice;
+        cin >> choice;
+        delete board[row][col];
+
+        switch (choice) {
+            case 2:  board[row][col] = new Rook   (isWhitePiece, row, col); break;
+            case 3:  board[row][col] = new Bishop (isWhitePiece, row, col); break;
+            case 4:  board[row][col] = new Knight (isWhitePiece, row, col); break;
+            default: board[row][col] = new Queen  (isWhitePiece, row, col); break;
+        }
+        cout << "  Promoted to: " << board[row][col]->getSymbol() << "\n";
+    }
+
+    // --- Board query helpers ---
+
+    bool findKing(int& kingRow, int& kingCol, bool forWhite) const {
+        char sym = forWhite ? 'K' : 'k';
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                if (board[i][j] && board[i][j]->getSymbol() == sym) {
+                    kingRow = i; kingCol = j; return true;
+                }
+        return false;
+    }
+
+    bool isCurrentPlayerInCheck() const {
+        int kr, kc;
+        if (!findKing(kr, kc, whiteTurn)) return false;
+        return isSquareUnderAttack(kr, kc, !whiteTurn);
+    }
+
+    bool hasAnyLegalMove() const {
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                if (!board[i][j] || board[i][j]->getColor() != whiteTurn) continue;
+                for (int ti = 0; ti < 8; ti++) {
+                    for (int tj = 0; tj < 8; tj++) {
+                        if (board[i][j]->isValidMove(ti, tj, board)
+                            && !wouldLeaveKingInCheck(i, j, ti, tj))
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+public:
+    // ==================== CONSTRUCTION ====================
+
+    Board() : whiteTurn(true), enPassantAvailable(false),
+              enPassantTargetRow(-1), enPassantTargetCol(-1) {
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                board[i][j] = nullptr;
+        setupBoard();
+    }
+
+    Board(const Board& other)
+        : whiteTurn(other.whiteTurn),
+          enPassantAvailable(other.enPassantAvailable),
+          enPassantTargetRow(other.enPassantTargetRow),
+          enPassantTargetCol(other.enPassantTargetCol) {
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                board[i][j] = other.board[i][j] ? other.board[i][j]->clone() : nullptr;
+    }
+
+    ~Board() {
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                delete board[i][j];
+    }
+
+    void setupBoard() {
+        // Pawns
+        for (int i = 0; i < 8; i++) {
+            board[1][i] = new Pawn(false, 1, i);
+            board[6][i] = new Pawn(true,  6, i);
+        }
+        // Back ranks
+        auto placePieces = [&](int row, bool white) {
+            board[row][0] = new Rook  (white, row, 0);
+            board[row][1] = new Knight(white, row, 1);
+            board[row][2] = new Bishop(white, row, 2);
+            board[row][3] = new Queen (white, row, 3);
+            board[row][4] = new King  (white, row, 4);
+            board[row][5] = new Bishop(white, row, 5);
+            board[row][6] = new Knight(white, row, 6);
+            board[row][7] = new Rook  (white, row, 7);
+        };
+        placePieces(0, false);
+        placePieces(7, true);
+    }
+
+    // ==================== DISPLAY ====================
+
+public:
+    void display() const {
+        const string divider = "  +---+---+---+---+---+---+---+---+";
+        cout << "\n";
+        cout << "      a   b   c   d   e   f   g   h\n";
+        cout << divider << "\n";
+        for (int i = 0; i < 8; i++) {
+            cout << "  " << (8 - i) << " ";
+            for (int j = 0; j < 8; j++) {
+                cout << "| ";
+                if (!board[i][j]) {
+                    bool dark = (i + j) % 2 == 1;
+                    cout << (dark ? '.' : ' ');
+                } else {
+                    cout << board[i][j]->getSymbol();
+                }
+                cout << " ";
+            }
+            cout << "| " << (8 - i) << "\n";
+            cout << divider << "\n";
+        }
+        cout << "      a   b   c   d   e   f   g   h\n\n";
+        cout << "  >> " << (whiteTurn ? "WHITE" : "BLACK") << "'s turn"
+             << "   (WHITE = uppercase, BLACK = lowercase)\n";
+        if (isCurrentPlayerInCheck())
+            cout << "  * CHECK! *\n";
+        cout << "\n";
+    }
+
+    // ==================== MOVE EXECUTION ====================
+
+    bool movePiece(int fromRow, int fromCol, int toRow, int toCol) {
+        if (!board[fromRow][fromCol]) {
+            cout << "  ERROR: No piece at selected position!\n";
+            return false;
+        }
+        if (board[fromRow][fromCol]->getColor() != whiteTurn) {
+            cout << "  ERROR: It's not your turn!\n";
+            return false;
+        }
+
+        // --- Castling ---
+        if (dynamic_cast<King*>(board[fromRow][fromCol])
+            && abs(toCol - fromCol) == 2 && fromRow == toRow) {
+            if (!isValidCastling(fromRow, fromCol, toCol)) {
+                cout << "  ERROR: Castling not allowed!\n";
+                return false;
+            }
+            executeCastling(fromRow, fromCol, toCol);
+            whiteTurn = !whiteTurn;
+            enPassantAvailable = false;
+            return true;
+        }
+
+        // --- En passant ---
+        if (tryEnPassant(fromRow, fromCol, toRow, toCol)) {
+            whiteTurn = !whiteTurn;
+            enPassantAvailable = false;
+            return true;
+        }
+
+        // --- Normal move validation ---
+        if (!board[fromRow][fromCol]->isValidMove(toRow, toCol, board)) {
+            cout << "  ERROR: Invalid move for this piece!\n";
+            return false;
+        }
+        if (wouldLeaveKingInCheck(fromRow, fromCol, toRow, toCol)) {
+            cout << "  ERROR: That move would put your king in check!\n";
+            return false;
+        }
+
+        // Set en passant opportunity
+        enPassantAvailable = false;
+        if (dynamic_cast<Pawn*>(board[fromRow][fromCol]) && abs(toRow - fromRow) == 2) {
+            enPassantTargetRow  = (fromRow + toRow) / 2;
+            enPassantTargetCol  = fromCol;
+            enPassantAvailable  = true;
+        }
+
+        // Execute
+        delete board[toRow][toCol];
+        board[toRow][toCol]   = board[fromRow][fromCol];
+        board[fromRow][fromCol] = nullptr;
+        board[toRow][toCol]->setPosition(toRow, toCol);
+        board[toRow][toCol]->setHasMoved(true);
+
+        // Promotion
+        if (dynamic_cast<Pawn*>(board[toRow][toCol]) && (toRow == 0 || toRow == 7))
+            handlePromotion(toRow, toCol);
+
+        whiteTurn = !whiteTurn;
+        return true;
+    }
+
+    // ==================== GAME STATE ====================
+
+    // Returns: 0 = ongoing, 1 = checkmate, 2 = stalemate
+    int getGameStatus() const {
+        if (hasAnyLegalMove()) return 0;
+        return isCurrentPlayerInCheck() ? 1 : 2;
+    }
+
+    bool isWhiteTurn() const { return whiteTurn; }
+};
+
+// ==================== GAME MANAGER ====================
+class ChessGame {
+private:
+    Board board;
+
+    bool parseInput(const string& input, int& row, int& col) const {
+        if (input.length() != 2) return false;
+        char file = tolower(input[0]);
+        char rank = input[1];
+        if (file < 'a' || file > 'h') return false;
+        if (rank < '1' || rank > '8') return false;
+        col = file - 'a';
+        row = 8 - (rank - '0');
+        return true;
+    }
+
+    void printHeader() const {
+        cout << "\n";
+        cout << "  +=========================================+\n";
+        cout << "  |          CHESS  GAME  MASTER            |\n";
+        cout << "  |        Two-Player Console Chess         |\n";
+        cout << "  +=========================================+\n\n";
+        cout << "  INSTRUCTIONS:\n";
+        cout << "  -----------------------------------------\n";
+        cout << "  Enter moves as: 'from to'  e.g.  e2 e4\n";
+        cout << "  Castling   : move king two squares (e1 g1)\n";
+        cout << "  En Passant : capture pawn after double advance\n";
+        cout << "  Promotion  : pawn reaching last rank auto-prompts\n";
+        cout << "  Quit       : type 'quit' or 'q'\n";
+        cout << "  -----------------------------------------\n\n";
+    }
+
+    void printResult(int status) const {
+        cout << "\n  +=========================================+\n";
+        if (status == 1) {
+            cout << "  |              CHECKMATE!                 |\n";
+            cout << "  |    " << (board.isWhiteTurn() ? "BLACK" : "WHITE") << " WINS!                          |\n";
+        } else {
+            cout << "  |              STALEMATE!                 |\n";
+            cout << "  |           GAME ENDS IN DRAW             |\n";
+        }
+        cout << "  +=========================================+\n\n";
+    }
+
+public:
+    void run() {
+        printHeader();
+        int moveCount = 0;
+
+        while (true) {
+            board.display();
+
+            int status = board.getGameStatus();
+            if (status != 0) { printResult(status); break; }
+
+            string from, to;
+            cout << "\n  Move #" << ++moveCount << " >> Enter move: ";
+            cin >> from;
+
+            if (from == "quit" || from == "q") {
+                cout << "\n  Game ended by user. Thanks for playing!\n";
+                break;
+            }
+
+            cin >> to;
+
+            int fromRow, fromCol, toRow, toCol;
+            if (!parseInput(from, fromRow, fromCol) || !parseInput(to, toRow, toCol)) {
+                cout << "  ERROR: Invalid format! Use e.g. 'e2 e4'\n";
+                cin.clear();
+                moveCount--;
+                continue;
+            }
+
+            if (board.movePiece(fromRow, fromCol, toRow, toCol))
+                cout << "  OK: Move executed.\n";
+            else
+                moveCount--;
+        }
+
+        cout << "\n  +=========================================+\n";
+        cout << "  |         THANK YOU FOR PLAYING!          |\n";
+        cout << "  +=========================================+\n\n";
+    }
+};
+
+// ==================== MAIN ====================
+int main() {
+    ChessGame game;
+    game.run();
+    return 0;
+}
